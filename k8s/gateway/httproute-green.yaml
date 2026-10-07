@@ -7,7 +7,19 @@ spec:
   parentRefs:
     - name: bluegreen-gateway
   rules:
-    # Public Traffic (0% Blue, 100% Green)
+    # Rule 1: Preview test routing for BLUE when GREEN is live
+    - matches:
+        - headers:
+            - name: X-Version
+              value: blue
+          path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: bluegreen-blue-svc
+          port: 80
+
+    # Rule 2: Public Traffic (100% Green, 0% Blue)
     - matches:
         - path:
             type: PathPrefix

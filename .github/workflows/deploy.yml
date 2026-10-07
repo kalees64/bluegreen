@@ -6,16 +6,16 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      target_env:
-        description: 'Target Deployment Action'
+      target_action:
+        description: 'Target Deployment / Traffic Action'
         required: true
-        default: 'blue'
+        default: 'deploy-blue'
         type: choice
         options:
-          - blue
-          - green
-          - cutover-to-green
-          - rollback-to-blue
+          - deploy-blue
+          - deploy-green
+          - switch-traffic-to-green
+          - switch-traffic-to-blue
       image_tag:
         description: 'Docker Image Tag'
         required: true
@@ -91,41 +91,45 @@ jobs:
               fi
             fi
 
-            # 2. Apply Namespace, GatewayClass, Gateway, and Services
+            # 2. Ensure Namespace, GatewayClass, Gateway, and Services exist
             kubectl apply -f ~/bluegreen/k8s/namespace.yaml
             kubectl apply -f ~/bluegreen/k8s/gateway/gatewayclass.yaml
             kubectl apply -f ~/bluegreen/k8s/gateway/gateway.yaml
             kubectl apply -f ~/bluegreen/k8s/blue/service.yaml
             kubectl apply -f ~/bluegreen/k8s/green/service.yaml
 
-            TARGET="${{ github.event.inputs.target_env || 'blue' }}"
+            ACTION="${{ github.event.inputs.target_action || 'deploy-blue' }}"
             IMAGE_TAG="${{ github.event.inputs.image_tag || 'v1.0' }}"
             DOCKER_USER="${{ secrets.DOCKERHUB_USERNAME }}"
 
-            if [ "$TARGET" = "blue" ]; then
-              echo ">>> Deploying BLUE Environment ($IMAGE_TAG)..."
+            # Show current cluster traffic weights
+            echo "================ Current Routing State ================"
+            kubectl get httproute bluegreen-route -n bluegreen -o jsonpath='{range .spec.rules[-1].backendRefs[*]}{"Backend: "}{.name}{" | Weight: "}{.weight}{"%\n"}{end}' 2>/dev/null || echo "Initial deployment (no active route yet)"
+            echo "========================================================"
+
+            if [ "$ACTION" = "deploy-blue" ]; then
+              echo ">>> Deploying to BLUE ($IMAGE_TAG)..."
               sed -i "s|image:.*|image: ${DOCKER_USER}/bluegreen:${IMAGE_TAG}|g" ~/bluegreen/k8s/blue/deployment.yaml
               kubectl apply -f ~/bluegreen/k8s/blue/
-              kubectl apply -f ~/bluegreen/k8s/gateway/httproute-blue.yaml
+              kubectl rollout restart deployment/bluegreen-blue -n bluegreen
               kubectl rollout status deployment/bluegreen-blue -n bluegreen --timeout=90s
-              echo ">>> Blue environment is LIVE with 100% traffic."
+              echo ">>> Blue environment is updated! (If Blue is live, it serves users; if idle, test via X-Version: blue)"
 
-            elif [ "$TARGET" = "green" ]; then
-              echo ">>> Deploying GREEN Environment ($IMAGE_TAG)..."
+            elif [ "$ACTION" = "deploy-green" ]; then
+              echo ">>> Deploying to GREEN ($IMAGE_TAG)..."
               sed -i "s|image:.*|image: ${DOCKER_USER}/bluegreen:${IMAGE_TAG}|g" ~/bluegreen/k8s/green/deployment.yaml
               kubectl apply -f ~/bluegreen/k8s/green/
-              # Keep httproute-blue active so testing header works while public traffic stays on blue
-              kubectl apply -f ~/bluegreen/k8s/gateway/httproute-blue.yaml
+              kubectl rollout restart deployment/bluegreen-green -n bluegreen
               kubectl rollout status deployment/bluegreen-green -n bluegreen --timeout=90s
-              echo ">>> Green environment deployed! Test via header: X-Version: green"
+              echo ">>> Green environment is updated! (If Green is live, it serves users; if idle, test via X-Version: green)"
 
-            elif [ "$TARGET" = "cutover-to-green" ]; then
-              echo ">>> Cutting over 100% traffic to GREEN..."
+            elif [ "$ACTION" = "switch-traffic-to-green" ]; then
+              echo ">>> Switching 100% public traffic to GREEN (Blue set to 0%)..."
               kubectl apply -f ~/bluegreen/k8s/gateway/httproute-green.yaml
-              echo ">>> Traffic cutover complete! 100% public traffic routed to Green."
+              echo ">>> Switch complete! GREEN is now ACTIVE (100%), BLUE is IDLE (0%)."
 
-            elif [ "$TARGET" = "rollback-to-blue" ]; then
-              echo ">>> Rolling back 100% traffic to BLUE..."
+            elif [ "$ACTION" = "switch-traffic-to-blue" ]; then
+              echo ">>> Switching 100% public traffic to BLUE (Green set to 0%)..."
               kubectl apply -f ~/bluegreen/k8s/gateway/httproute-blue.yaml
-              echo ">>> Rollback complete! 100% public traffic restored to Blue."
+              echo ">>> Switch complete! BLUE is now ACTIVE (100%), GREEN is IDLE (0%)."
             fi
