@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bluegreen-route
+  namespace: bluegreen
+spec:
+  parentRefs:
+    - name: bluegreen-gateway
+  rules:
+    # Public Traffic (0% Blue, 100% Green)
+    - backendRefs:
+        - name: bluegreen-blue-svc
+          port: 80
+          weight: 0
+        - name: bluegreen-green-svc
+          port: 80
+          weight: 100
