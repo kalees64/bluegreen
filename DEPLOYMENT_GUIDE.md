@@ -95,9 +95,9 @@ Log into your EC2 terminal via SSH and verify K3s and Gateway API:
    ```
    *(Alternatively: `sudo chmod 644 /etc/rancher/k3s/k3s.yaml`)*
 
-3. **Install Kubernetes Gateway API CRDs** (Standard v1.1.0):
+3. **Install Kubernetes Gateway API CRDs** (Experimental v1.1.0 - Required by Envoy Gateway for TLSRoute/TCPRoute):
    ```bash
-   sudo kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
+   sudo kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/experimental-install.yaml
    ```
 3. **Install Envoy Gateway** (The Gateway API controller):
    ```bash
