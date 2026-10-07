@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bluegreen-green
+  namespace: bluegreen
+  labels:
+    app: bluegreen
+    version: green-v2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bluegreen
+      version: green-v2
+  template:
+    metadata:
+      labels:
+        app: bluegreen
+        version: green-v2
+    spec:
+      containers:
+        - name: web
+          image: kalees64/bluegreen:v2.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5

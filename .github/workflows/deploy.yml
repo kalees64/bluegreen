@@ -1,0 +1,248 @@
+name: Blue-Green CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'Target Deployment Environment'
+        required: true
+        default: 'blue'
+        type: choice
+        options:
+          - blue
+          - green
+          - cutover-to-green
+          - rollback-to-blue
+      image_tag:
+        description: 'Docker Image Tag'
+        required: true
+        default: 'v1.0'
+
+jobs:
+  build-and-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/bluegreen:${{ github.event.inputs.image_tag || 'v1.0' }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/bluegreen:latest
+
+  deploy-to-ec2:
+    name: Deploy to K3s on EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Manifests
+        uses: actions/checkout@v4
+
+      - name: Execute Deployment via SSH on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            echo "==== Connected to EC2 K3s Cluster ===="
+
+            # Ensure bluegreen namespace exists
+            kubectl apply -f - <<EOF
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: bluegreen
+            EOF
+
+            TARGET="${{ github.event.inputs.target_env || 'blue' }}"
+            IMAGE_TAG="${{ github.event.inputs.image_tag || 'v1.0' }}"
+            DOCKER_USER="${{ secrets.DOCKERHUB_USERNAME }}"
+
+            if [ "$TARGET" = "blue" ]; then
+              echo "Deploying BLUE (v1.0)..."
+              kubectl apply -f - <<EOF
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: bluegreen-blue
+                namespace: bluegreen
+                labels:
+                  app: bluegreen
+                  version: blue-v1
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels:
+                    app: bluegreen
+                    version: blue-v1
+                template:
+                  metadata:
+                    labels:
+                      app: bluegreen
+                      version: blue-v1
+                  spec:
+                    containers:
+                      - name: web
+                        image: ${DOCKER_USER}/bluegreen:${IMAGE_TAG}
+                        ports:
+                          - containerPort: 80
+              EOF
+
+              kubectl apply -f - <<EOF
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: bluegreen-blue-svc
+                namespace: bluegreen
+              spec:
+                type: ClusterIP
+                selector:
+                  app: bluegreen
+                  version: blue-v1
+                ports:
+                  - port: 80
+                    targetPort: 80
+              EOF
+
+              # Route traffic 100% to Blue
+              kubectl apply -f - <<EOF
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: bluegreen-route
+                namespace: bluegreen
+              spec:
+                parentRefs:
+                  - name: bluegreen-gateway
+                rules:
+                  - matches:
+                      - headers:
+                          - name: X-Version
+                            value: green
+                    backendRefs:
+                      - name: bluegreen-green-svc
+                        port: 80
+                  - backendRefs:
+                      - name: bluegreen-blue-svc
+                        port: 80
+                        weight: 100
+                      - name: bluegreen-green-svc
+                        port: 80
+                        weight: 0
+              EOF
+
+              kubectl rollout status deployment/bluegreen-blue -n bluegreen --timeout=90s
+              echo "Blue deployment active (100% traffic)!"
+
+            elif [ "$TARGET" = "green" ]; then
+              echo "Deploying GREEN (${IMAGE_TAG})..."
+              kubectl apply -f - <<EOF
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: bluegreen-green
+                namespace: bluegreen
+                labels:
+                  app: bluegreen
+                  version: green-v2
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels:
+                    app: bluegreen
+                    version: green-v2
+                template:
+                  metadata:
+                    labels:
+                      app: bluegreen
+                      version: green-v2
+                  spec:
+                    containers:
+                      - name: web
+                        image: ${DOCKER_USER}/bluegreen:${IMAGE_TAG}
+                        ports:
+                          - containerPort: 80
+              EOF
+
+              kubectl apply -f - <<EOF
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: bluegreen-green-svc
+                namespace: bluegreen
+              spec:
+                type: ClusterIP
+                selector:
+                  app: bluegreen
+                  version: green-v2
+                ports:
+                  - port: 80
+                    targetPort: 80
+              EOF
+
+              kubectl rollout status deployment/bluegreen-green -n bluegreen --timeout=90s
+              echo "Green deployment ready! Test using header: X-Version: green"
+
+            elif [ "$TARGET" = "cutover-to-green" ]; then
+              echo "Shifting 100% traffic to GREEN..."
+              kubectl apply -f - <<EOF
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: bluegreen-route
+                namespace: bluegreen
+              spec:
+                parentRefs:
+                  - name: bluegreen-gateway
+                rules:
+                  - backendRefs:
+                      - name: bluegreen-blue-svc
+                        port: 80
+                        weight: 0
+                      - name: bluegreen-green-svc
+                        port: 80
+                        weight: 100
+              EOF
+              echo "Cutover complete! All public traffic is now routed to Green."
+
+            elif [ "$TARGET" = "rollback-to-blue" ]; then
+              echo "Rolling back 100% traffic to BLUE..."
+              kubectl apply -f - <<EOF
+              apiVersion: gateway.networking.k8s.io/v1
+              kind: HTTPRoute
+              metadata:
+                name: bluegreen-route
+                namespace: bluegreen
+              spec:
+                parentRefs:
+                  - name: bluegreen-gateway
+                rules:
+                  - backendRefs:
+                      - name: bluegreen-blue-svc
+                        port: 80
+                        weight: 100
+                      - name: bluegreen-green-svc
+                        port: 80
+                        weight: 0
+              EOF
+              echo "Rollback complete! All traffic reverted to Blue."
+            fi

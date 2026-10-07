@@ -1,0 +1,29 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: bluegreen-route
+  namespace: bluegreen
+spec:
+  parentRefs:
+    - name: bluegreen-gateway
+  rules:
+    # Rule 1: Header-based test routing (X-Version: green)
+    # Allows developers/testers to access Green pods directly before switching public traffic
+    - matches:
+        - headers:
+            - name: X-Version
+              value: green
+      backendRefs:
+        - name: bluegreen-green-svc
+          port: 80
+
+    # Rule 2: Public Traffic (Weighted Blue/Green distribution)
+    # Default State (Blue Live): weight 100 on Blue, 0 on Green
+    # Cutover State (Green Live): weight 0 on Blue, 100 on Green
+    - backendRefs:
+        - name: bluegreen-blue-svc
+          port: 80
+          weight: 100
+        - name: bluegreen-green-svc
+          port: 80
+          weight: 0
