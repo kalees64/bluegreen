@@ -12,12 +12,19 @@ spec:
         - headers:
             - name: X-Version
               value: green
+          path:
+            type: PathPrefix
+            value: /
       backendRefs:
         - name: bluegreen-green-svc
           port: 80
 
     # Rule 2: Public Traffic (100% Blue, 0% Green)
-    - backendRefs:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
         - name: bluegreen-blue-svc
           port: 80
           weight: 100

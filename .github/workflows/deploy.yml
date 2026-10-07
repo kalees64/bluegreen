@@ -91,9 +91,11 @@ jobs:
               fi
             fi
 
-            # 2. Apply Namespace and Gateway
+            # 2. Apply Namespace, Gateway, and Services
             kubectl apply -f ~/bluegreen/k8s/namespace.yaml
             kubectl apply -f ~/bluegreen/k8s/gateway/gateway.yaml
+            kubectl apply -f ~/bluegreen/k8s/blue/service.yaml
+            kubectl apply -f ~/bluegreen/k8s/green/service.yaml
 
             TARGET="${{ github.event.inputs.target_env || 'blue' }}"
             IMAGE_TAG="${{ github.event.inputs.image_tag || 'v1.0' }}"

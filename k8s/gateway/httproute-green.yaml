@@ -8,7 +8,11 @@ spec:
     - name: bluegreen-gateway
   rules:
     # Public Traffic (0% Blue, 100% Green)
-    - backendRefs:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
         - name: bluegreen-blue-svc
           port: 80
           weight: 0
