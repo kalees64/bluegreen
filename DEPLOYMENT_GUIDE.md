@@ -7,11 +7,14 @@ This guide explains **Blue-Green Deployment** from theoretical principles to end
 ## 1. What is Blue-Green Deployment & How Does It Work?
 
 ### The Core Concept
+
 In software deployments, downtime or broken releases can disrupt users. Traditional rolling deployments replace old pods with new ones gradually, which can result in:
+
 - A mix of old and new versions running simultaneously.
 - Slower rollbacks if the new version fails under live traffic.
 
 **Blue-Green Deployment** solves this by maintaining **two identical production environments**:
+
 - **Blue (Active / Current)**: Currently serving 100% of live user traffic (Version 1.0).
 - **Green (Idle / Staging / Next)**: Hosts the new release (Version 2.0).
 
@@ -34,6 +37,7 @@ In software deployments, downtime or broken releases can disrupt users. Traditio
 ```
 
 ### The Flow: From Your PC to EC2 K3s
+
 1. **You write code on your PC** (e.g. updating the app to v2.0).
 2. **You commit & push to GitHub**.
 3. **GitHub Actions CI/CD triggers**:
@@ -55,13 +59,13 @@ In software deployments, downtime or broken releases can disrupt users. Traditio
 To automate this pipeline securely, configure the following **5 secrets** in your GitHub repository:
 👉 Go to **GitHub Repository** ➔ **Settings** ➔ **Secrets and variables** ➔ **Actions** ➔ **New repository secret**:
 
-| Secret Name | Description | Example / Where to find |
-| :--- | :--- | :--- |
-| `DOCKERHUB_USERNAME` | Your Docker Hub account username | `kalees64` |
-| `DOCKERHUB_TOKEN` | Docker Hub Access Token | Docker Hub ➔ Account Settings ➔ Security ➔ New Access Token (Read & Write) |
-| `EC2_HOST` | Public IP or DNS of your AWS EC2 instance | `54.210.xx.xx` |
-| `EC2_USER` | SSH username for your EC2 instance | Usually `ubuntu` (or `ec2-user`) |
-| `EC2_SSH_KEY` | Private SSH key (`.pem`) used to log in | The complete content of your `.pem` key file (starts with `-----BEGIN OPENSSH PRIVATE KEY-----`) |
+| Secret Name          | Description                               | Example / Where to find                                                                          |
+| :------------------- | :---------------------------------------- | :----------------------------------------------------------------------------------------------- |
+| `DOCKERHUB_USERNAME` | Your Docker Hub account username          | `kalees64`                                                                                       |
+| `DOCKERHUB_TOKEN`    | Docker Hub Access Token                   | Docker Hub ➔ Account Settings ➔ Security ➔ New Access Token (Read & Write)                       |
+| `EC2_HOST`           | Public IP or DNS of your AWS EC2 instance | `54.210.xx.xx`                                                                                   |
+| `EC2_USER`           | SSH username for your EC2 instance        | Usually `ubuntu` (or `ec2-user`)                                                                 |
+| `EC2_SSH_KEY`        | Private SSH key (`.pem`) used to log in   | The complete content of your `.pem` key file (starts with `-----BEGIN OPENSSH PRIVATE KEY-----`) |
 
 > [!IMPORTANT]
 > **Security Notice**: Never paste `DOCKERHUB_TOKEN` or `EC2_SSH_KEY` directly into public chats. Keep them strictly in GitHub Repository Secrets.
@@ -71,13 +75,27 @@ To automate this pipeline securely, configure the following **5 secrets** in you
 ## 3. Step 1 to Last: Complete Step-by-Step Execution
 
 ### Step 1: EC2 One-Time Setup (Gateway API & Envoy Gateway)
+
 Log into your EC2 terminal via SSH and verify K3s and Gateway API:
 
 1. **Verify K3s is active**:
    ```bash
    sudo kubectl get nodes
    ```
-2. **Install Kubernetes Gateway API CRDs** (Standard v1.1.0):
+
+2. **Set up Kubeconfig access for the SSH user (`ubuntu`)**:
+   By default, `/etc/rancher/k3s/k3s.yaml` is only readable by `root`. Copy it to your user's home directory so `kubectl` works without `sudo`:
+   ```bash
+   mkdir -p ~/.kube
+   sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+   sudo chown $(id -u):$(id -g) ~/.kube/config
+   chmod 600 ~/.kube/config
+   echo 'export KUBECONFIG=~/.kube/config' >> ~/.bashrc
+   export KUBECONFIG=~/.kube/config
+   ```
+   *(Alternatively: `sudo chmod 644 /etc/rancher/k3s/k3s.yaml`)*
+
+3. **Install Kubernetes Gateway API CRDs** (Standard v1.1.0):
    ```bash
    sudo kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.1.0/standard-install.yaml
    ```
@@ -85,18 +103,21 @@ Log into your EC2 terminal via SSH and verify K3s and Gateway API:
    ```bash
    helm install eg oci://docker.io/envoyproxy/gateway-helm --version v1.1.0 -n envoy-gateway-system --create-namespace
    ```
-   *(If you don't have Helm, run `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash` first)*
+   _(If you don't have Helm, run `curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash` first)_
 4. **Ensure AWS Security Group allows inbound Port 80 (HTTP)**:
    In AWS EC2 Console ➔ Security Groups ➔ Inbound Rules ➔ Add Rule: **HTTP (Port 80)** from `0.0.0.0/0`.
 5. **Apply the Gateway manifest**:
    ```bash
+   sudo kubectl create namespace bluegreen
    sudo kubectl apply -f https://raw.githubusercontent.com/kalees64/bluegreen/main/k8s/gateway/gateway.yaml
    ```
 
 ---
 
 ### Step 2: Push Repository Code to GitHub
+
 Ensure all new deployment manifests and Docker files are committed and pushed:
+
 ```bash
 git add .
 git commit -m "feat: add Dockerfile, Nginx config, k8s manifests, and CI/CD workflow"
@@ -106,6 +127,7 @@ git push origin main
 ---
 
 ### Step 3: Initial Blue Deployment (Version 1.0)
+
 1. Go to your GitHub repository ➔ **Actions** tab.
 2. Select **Blue-Green CI/CD Pipeline** ➔ Click **Run workflow**:
    - `target_env`: **blue**
@@ -123,7 +145,9 @@ git push origin main
 ---
 
 ### Step 4: Make Code Changes & Deploy Green (Version 2.0)
+
 Now simulate a new production release:
+
 1. In `src/App.jsx`, update the badge to `v2.0` and customize the header or counter features.
 2. Update `package.json` version to `2.0.0`.
 3. Commit and push:
@@ -144,6 +168,7 @@ Now simulate a new production release:
 ---
 
 ### Step 5: Test Green in Production Before Cutover
+
 Because the HTTPRoute includes a test rule, you can test Green directly:
 
 1. **Using curl with the test header**:
@@ -159,7 +184,9 @@ Because the HTTPRoute includes a test rule, you can test Green directly:
 ---
 
 ### Step 6: Traffic Cutover (Zero Downtime)
+
 Once you are confident with Green v2.0:
+
 1. Go to GitHub Actions ➔ **Run workflow**:
    - `target_env`: **cutover-to-green**
    - Click **Run workflow**.
@@ -172,7 +199,9 @@ Once you are confident with Green v2.0:
 ---
 
 ### Step 7: Instant Rollback (If Needed)
+
 If a critical bug is discovered in Green:
+
 1. Go to GitHub Actions ➔ **Run workflow**:
    - `target_env`: **rollback-to-blue**
    - Click **Run workflow**.
